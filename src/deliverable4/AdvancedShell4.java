@@ -6,11 +6,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.*;
 
 /**
- * AdvancedShell - A simple shell simulation in Java with Memory Management and Process Synchronization.
+ * AdvancedShell4 - A simple shell simulation in Java with Memory Management and Process Synchronization.
  * Supports basic Unix-like commands, background job management, external commands,
  * internal process scheduling, paging system, and synchronization mechanisms.
  */
-public class AdvancedShell3 {
+public class AdvancedShell4 {
 
     // Current working directory
     private String currentDirectory;
@@ -32,7 +32,7 @@ public class AdvancedShell3 {
     private static SchedulingAlgorithm currentSchedulingAlgorithm;
     private int timeQuantum; // for Round-Robin
     private final ScheduledExecutorService scheduler;
-    private boolean schedulingEnabled;
+    private final boolean schedulingEnabled;
 
     // Performance metrics tracking
     private final Map<Integer, ProcessMetrics> processMetrics;
@@ -44,9 +44,383 @@ public class AdvancedShell3 {
     // Process Synchronization
     private final SynchronizationManager syncManager;
 
+    // Security System
+    private final SecurityManager securityManager;
+    private SecurityManager.User currentUser;
+
+    // Piping system
+    private final PipingManager pipingManager;
+
     // Scheduling algorithms
     enum SchedulingAlgorithm {
         ROUND_ROBIN, PRIORITY
+    }
+
+    /**
+     * Security Manager - handles user authentication and file permissions
+     */
+    static class SecurityManager {
+        private final Map<String, User> users;
+        private final Map<String, FilePermission> filePermissions;
+        private User currentUser;
+
+        static class User {
+            String username;
+            String password;
+            UserRole role;
+            String homeDirectory;
+
+            User(String username, String password, UserRole role) {
+                this.username = username;
+                this.password = password;
+                this.role = role;
+                this.homeDirectory = "/home/" + username;
+            }
+
+            boolean checkPassword(String inputPassword) {
+                return this.password.equals(inputPassword);
+            }
+
+            boolean hasPermission(FilePermission permission, FileOperation operation) {
+                if (role == UserRole.ADMIN) return true;
+
+                switch (operation) {
+                    case READ: return permission.userRead || (role == UserRole.STANDARD && permission.groupRead);
+                    case WRITE: return permission.userWrite || (role == UserRole.STANDARD && permission.groupWrite);
+                    case EXECUTE: return permission.userExecute || (role == UserRole.STANDARD && permission.groupExecute);
+                    default: return false;
+                }
+            }
+        }
+
+        enum UserRole {
+            ADMIN, STANDARD
+        }
+
+        static class FilePermission {
+            String filePath;
+            String owner;
+            String group;
+            boolean userRead, userWrite, userExecute;
+            boolean groupRead, groupWrite, groupExecute;
+            boolean otherRead, otherWrite, otherExecute;
+
+            FilePermission(String filePath, String owner) {
+                this.filePath = filePath;
+                this.owner = owner;
+                this.group = "users";
+                // Default permissions: owner has read/write, group has read, others have read
+                this.userRead = this.userWrite = true;
+                this.groupRead = true;
+                this.otherRead = true;
+            }
+
+            String getPermissionString() {
+                return (userRead ? "r" : "-") + (userWrite ? "w" : "-") + (userExecute ? "x" : "-") +
+                        (groupRead ? "r" : "-") + (groupWrite ? "w" : "-") + (groupExecute ? "x" : "-") +
+                        (otherRead ? "r" : "-") + (otherWrite ? "w" : "-") + (otherExecute ? "x" : "-");
+            }
+        }
+
+        enum FileOperation {
+            READ, WRITE, EXECUTE, DELETE
+        }
+
+        SecurityManager() {
+            this.users = new HashMap<>();
+            this.filePermissions = new HashMap<>();
+            initializeDefaultUsers();
+        }
+
+        private void initializeDefaultUsers() {
+            // Create default admin user
+            User admin = new User("admin", "admin123", UserRole.ADMIN);
+            users.put("admin", admin);
+
+            // Create default standard user
+            User user = new User("user", "user123", UserRole.STANDARD);
+            users.put("user", user);
+
+            // Set admin as current user initially
+            currentUser = admin;
+        }
+
+        boolean authenticate(String username, String password) {
+            User user = users.get(username);
+            if (user != null && user.checkPassword(password)) {
+                currentUser = user;
+                return true;
+            }
+            return false;
+        }
+
+        void logout() {
+            currentUser = users.get("admin"); // Fall back to admin
+        }
+
+        User getCurrentUser() {
+            return currentUser;
+        }
+
+        boolean checkFilePermission(String filePath, FileOperation operation) {
+            FilePermission permission = filePermissions.get(filePath);
+            if (permission == null) {
+                // Create default permissions if none exist
+                permission = new FilePermission(filePath, currentUser.username);
+                filePermissions.put(filePath, permission);
+            }
+
+            return currentUser.hasPermission(permission, operation);
+        }
+
+        void setFilePermission(String filePath, String permissionString) {
+            FilePermission permission = filePermissions.get(filePath);
+            if (permission == null) {
+                permission = new FilePermission(filePath, currentUser.username);
+            }
+
+            // Parse permission string (e.g., "rw-r--r--")
+            if (permissionString.length() >= 9) {
+                permission.userRead = permissionString.charAt(0) == 'r';
+                permission.userWrite = permissionString.charAt(1) == 'w';
+                permission.userExecute = permissionString.charAt(2) == 'x';
+                permission.groupRead = permissionString.charAt(3) == 'r';
+                permission.groupWrite = permissionString.charAt(4) == 'w';
+                permission.groupExecute = permissionString.charAt(5) == 'x';
+                permission.otherRead = permissionString.charAt(6) == 'r';
+                permission.otherWrite = permissionString.charAt(7) == 'w';
+                permission.otherExecute = permissionString.charAt(8) == 'x';
+            }
+
+            filePermissions.put(filePath, permission);
+            System.out.println("Permissions for " + filePath + " set to: " + permission.getPermissionString());
+        }
+
+        void displayFilePermissions(String filePath) {
+            FilePermission permission = filePermissions.get(filePath);
+            if (permission != null) {
+                System.out.println(permission.getPermissionString() + " " + permission.owner +
+                        " " + permission.group + " " + filePath);
+            } else {
+                System.out.println("No permissions set for: " + filePath);
+            }
+        }
+
+        void createUser(String username, String password, UserRole role) {
+            if (currentUser.role != UserRole.ADMIN) {
+                System.out.println("Only admin can create users");
+                return;
+            }
+
+            if (users.containsKey(username)) {
+                System.out.println("User already exists: " + username);
+                return;
+            }
+
+            User newUser = new User(username, password, role);
+            users.put(username, newUser);
+            System.out.println("User created: " + username + " (" + role + ")");
+        }
+
+        void displayUsers() {
+            System.out.println("Users:");
+            for (User user : users.values()) {
+                System.out.println("  " + user.username + " (" + user.role + ")");
+            }
+        }
+    }
+
+    /**
+     * Piping Manager - handles command piping and redirection
+     */
+    static class PipingManager {
+
+        static class PipeCommand {
+            List<String[]> commands;
+            boolean inputRedirect;
+            boolean outputRedirect;
+            String inputFile;
+            String outputFile;
+            boolean appendOutput;
+
+            PipeCommand() {
+                this.commands = new ArrayList<>();
+                this.inputRedirect = false;
+                this.outputRedirect = false;
+            }
+        }
+
+        PipeCommand parsePipeCommand(String input) {
+            PipeCommand pipeCommand = new PipeCommand();
+
+            // Check for input redirection
+            if (input.contains("<")) {
+                pipeCommand.inputRedirect = true;
+                String[] parts = input.split("<", 2);
+                input = parts[0].trim();
+                pipeCommand.inputFile = parts[1].trim();
+            }
+
+            // Check for output redirection
+            if (input.contains(">")) {
+                pipeCommand.outputRedirect = true;
+                String[] parts = input.split(">", 2);
+                input = parts[0].trim();
+                pipeCommand.outputFile = parts[1].trim();
+
+                // Check for append
+                if (input.contains(">>")) {
+                    parts = input.split(">>", 2);
+                    input = parts[0].trim();
+                    pipeCommand.outputFile = parts[1].trim();
+                    pipeCommand.appendOutput = true;
+                }
+            }
+
+            // Split by pipes
+            String[] commandStrings = input.split("\\|");
+            for (String cmdStr : commandStrings) {
+                pipeCommand.commands.add(parseCommand(cmdStr.trim()));
+            }
+
+            return pipeCommand;
+        }
+
+        private String[] parseCommand(String command) {
+            List<String> tokens = new ArrayList<>();
+            boolean inQuotes = false;
+            StringBuilder currentToken = new StringBuilder();
+
+            for (char c : command.toCharArray()) {
+                if (c == '"') {
+                    inQuotes = !inQuotes;
+                } else if (Character.isWhitespace(c) && !inQuotes) {
+                    if (currentToken.length() > 0) {
+                        tokens.add(currentToken.toString());
+                        currentToken = new StringBuilder();
+                    }
+                } else {
+                    currentToken.append(c);
+                }
+            }
+
+            if (currentToken.length() > 0) {
+                tokens.add(currentToken.toString());
+            }
+
+            return tokens.toArray(new String[0]);
+        }
+
+        String executePipeCommand(PipeCommand pipeCommand, SecurityManager securityManager, String currentDirectory) {
+            try {
+                List<Process> processes = new ArrayList<>();
+                List<PipedOutputStream> outputs = new ArrayList<>();
+                List<PipedInputStream> inputs = new ArrayList<>();
+
+                // Create processes for each command in the pipe
+                for (int i = 0; i < pipeCommand.commands.size(); i++) {
+                    String[] command = pipeCommand.commands.get(i);
+
+                    ProcessBuilder pb = new ProcessBuilder(command);
+                    pb.directory(new File(currentDirectory));
+
+                    // Set up input stream
+                    if (i == 0 && pipeCommand.inputRedirect) {
+                        // Input redirection from file
+                        File inputFile = new File(pipeCommand.inputFile);
+                        if (!inputFile.isAbsolute()) {
+                            inputFile = new File(currentDirectory, pipeCommand.inputFile);
+                        }
+
+                        if (!securityManager.checkFilePermission(inputFile.getAbsolutePath(),
+                                SecurityManager.FileOperation.READ)) {
+                            return "Permission denied: Cannot read from " + inputFile.getAbsolutePath();
+                        }
+
+                        if (!inputFile.exists()) {
+                            return "Input file not found: " + inputFile.getAbsolutePath();
+                        }
+
+                        pb.redirectInput(inputFile);
+                    } else if (i > 0) {
+                        // Input from previous process
+                        PipedInputStream inputStream = new PipedInputStream();
+                        inputs.add(inputStream);
+                        pb.redirectInput(ProcessBuilder.Redirect.PIPE);
+                    }
+
+                    // Set up output stream
+                    if (i == pipeCommand.commands.size() - 1 && pipeCommand.outputRedirect) {
+                        // Output redirection to file
+                        File outputFile = new File(pipeCommand.outputFile);
+                        if (!outputFile.isAbsolute()) {
+                            outputFile = new File(currentDirectory, pipeCommand.outputFile);
+                        }
+
+                        if (!securityManager.checkFilePermission(outputFile.getAbsolutePath(),
+                                SecurityManager.FileOperation.WRITE)) {
+                            return "Permission denied: Cannot write to " + outputFile.getAbsolutePath();
+                        }
+
+                        if (pipeCommand.appendOutput) {
+                            pb.redirectOutput(ProcessBuilder.Redirect.appendTo(outputFile));
+                        } else {
+                            pb.redirectOutput(ProcessBuilder.Redirect.to(outputFile));
+                        }
+                    } else if (i < pipeCommand.commands.size() - 1) {
+                        // Output to next process
+                        PipedOutputStream outputStream = new PipedOutputStream();
+                        outputs.add(outputStream);
+                        pb.redirectOutput(ProcessBuilder.Redirect.PIPE);
+                    } else {
+                        // Final command output to console
+                        pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+                    }
+
+                    // Start the process
+                    Process process = pb.start();
+                    processes.add(process);
+
+                    // Connect pipes between processes
+                    if (i > 0) {
+                        PipedInputStream inputStream = inputs.get(i - 1);
+                        PipedOutputStream prevOutputStream = outputs.get(i - 2);
+                        prevOutputStream.connect(inputStream);
+                    }
+                }
+
+                // Connect the first output to second input, etc.
+                for (int i = 0; i < processes.size() - 1; i++) {
+                    Process currentProcess = processes.get(i);
+                    Process nextProcess = processes.get(i + 1);
+
+                    // Pipe output of current process to input of next process
+                    try (OutputStream out = currentProcess.getOutputStream();
+                         InputStream in = nextProcess.getInputStream()) {
+
+                        byte[] buffer = new byte[1024];
+                        int bytesRead;
+                        while ((bytesRead = in.read(buffer)) != -1) {
+                            out.write(buffer, 0, bytesRead);
+                        }
+                    }
+                }
+
+                // Wait for all processes to complete
+                for (Process process : processes) {
+                    process.waitFor();
+                }
+
+                return "Pipe command executed successfully";
+
+            } catch (IOException | InterruptedException e) {
+                return "Error executing pipe command: " + e.getMessage();
+            }
+        }
+
+        boolean isPipeCommand(String input) {
+            return input.contains("|") || input.contains("<") || input.contains(">");
+        }
     }
 
     /**
@@ -652,7 +1026,7 @@ public class AdvancedShell3 {
         }
     }
 
-    public AdvancedShell3() {
+    public AdvancedShell4() {
         this.currentDirectory = System.getProperty("user.dir");
         this.jobs = new ConcurrentHashMap<>();
         this.nextJobId = new AtomicInteger(1);
@@ -672,6 +1046,13 @@ public class AdvancedShell3 {
         // Initialize Synchronization Manager
         this.syncManager = new SynchronizationManager();
 
+        // Initialize Security Manager
+        this.securityManager = new SecurityManager();
+        this.currentUser = securityManager.getCurrentUser();
+
+        // Initialize Piping Manager
+        this.pipingManager = new PipingManager();
+
         // Initialize algorithm metrics
         for (SchedulingAlgorithm algo : SchedulingAlgorithm.values()) {
             algorithmMetrics.put(algo, new AlgorithmMetrics(algo));
@@ -679,6 +1060,55 @@ public class AdvancedShell3 {
 
         // Start the internal scheduler
         startInternalScheduler();
+
+    }
+
+    private boolean authenticateUser() {
+        System.out.println("=== User Authentication ===");
+        int attempts = 3;
+
+        while (attempts > 0) {
+            System.out.print("Username: ");
+            String username = scanner.nextLine().trim();
+            System.out.print("Password: ");
+            String password = scanner.nextLine().trim();
+
+            if (securityManager.authenticate(username, password)) {
+                currentUser = securityManager.getCurrentUser();
+                currentDirectory = currentUser.homeDirectory;
+                return true;
+            } else {
+                attempts--;
+                System.out.println("Invalid credentials. Attempts remaining: " + attempts);
+            }
+        }
+
+        return false;
+    }
+
+    private void displayWelcomeMessage() {
+        System.out.println("Welcome, " + currentUser.username + "!");
+        System.out.println("Type 'help' for available commands");
+        System.out.println("Type 'exit' to quit the shell");
+        System.out.println("Supported features:");
+        System.out.println("  • Command piping (e.g., ls | grep txt)");
+        System.out.println("  • Input/output redirection (e.g., ls > output.txt)");
+        System.out.println("  • User authentication and file permissions");
+        System.out.println("  • Process scheduling and memory management");
+        System.out.println("  • Process synchronization mechanisms");
+    }
+
+    private void executePipeCommand(String input) {
+        try {
+            PipingManager.PipeCommand pipeCommand = pipingManager.parsePipeCommand(input);
+            String result = pipingManager.executePipeCommand(pipeCommand, securityManager, currentDirectory);
+
+            if (!result.equals("Pipe command executed successfully")) {
+                System.out.println(result);
+            }
+        } catch (Exception e) {
+            System.out.println("Error executing pipe command: " + e.getMessage());
+        }
     }
 
     /**
@@ -900,6 +1330,14 @@ public class AdvancedShell3 {
         System.out.println("Type 'philosophers' to start dining philosophers simulation");
         System.out.println("Type 'producerconsumer <start|stop> [producers] [consumers]' for producer-consumer simulation");
 
+        // User authentication
+        if (!authenticateUser()) {
+            System.out.println("Authentication failed. Exiting...");
+            return;
+        }
+
+        displayWelcomeMessage();
+
         while (isRunning) {
             System.out.print("shell> ");
             String input = scanner.nextLine().trim();
@@ -1018,6 +1456,14 @@ public class AdvancedShell3 {
             case "mutex": handleMutex(args); break;
             case "philosophers": startPhilosophers(); break;
             case "producerconsumer": handleProducerConsumer(args); break;
+            //new security commands
+            case "whoami": whoami(); break;
+            case "logout": logout(); break;
+            case "chmod": chmod(args); break;
+            case "lsattr": lsattr(args); break;
+            case "adduser": adduser(args); break;
+            case "users": listUsers(); break;
+            case "help": help(); break;
             default: runExternalCommand(command, args, false); break;
         }
     }
@@ -1042,6 +1488,101 @@ public class AdvancedShell3 {
             }
         });
         bgThread.start();
+    }
+
+    // New security-related command implementations
+    private void whoami() {
+        System.out.println(currentUser.username + " (" + currentUser.role + ")");
+    }
+
+    private void logout() {
+        securityManager.logout();
+        currentUser = securityManager.getCurrentUser();
+        currentDirectory = currentUser.homeDirectory;
+        System.out.println("Logged out. Current user: " + currentUser.username);
+    }
+
+    private void chmod(String[] args) {
+        if (args.length < 2) {
+            System.out.println("Usage: chmod <permissions> <file>");
+            return;
+        }
+
+        String permissions = args[0];
+        String filename = args[1];
+
+        File file = new File(filename);
+        if (!file.isAbsolute()) {
+            file = new File(currentDirectory, filename);
+        }
+
+        if (!file.exists()) {
+            System.out.println("File not found: " + file.getAbsolutePath());
+            return;
+        }
+
+        securityManager.setFilePermission(file.getAbsolutePath(), permissions);
+    }
+
+    private void lsattr(String[] args) {
+        if (args.length == 0) {
+            // List permissions for current directory contents
+            File currentDir = new File(currentDirectory);
+            File[] files = currentDir.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    securityManager.displayFilePermissions(file.getAbsolutePath());
+                }
+            }
+        } else {
+            for (String filename : args) {
+                File file = new File(filename);
+                if (!file.isAbsolute()) {
+                    file = new File(currentDirectory, filename);
+                }
+                securityManager.displayFilePermissions(file.getAbsolutePath());
+            }
+        }
+    }
+
+    private void adduser(String[] args) {
+        if (args.length < 3) {
+            System.out.println("Usage: adduser <username> <password> <admin|standard>");
+            return;
+        }
+
+        String username = args[0];
+        String password = args[1];
+        String roleStr = args[2].toUpperCase();
+
+        SecurityManager.UserRole role;
+        try {
+            role = SecurityManager.UserRole.valueOf(roleStr);
+        } catch (IllegalArgumentException e) {
+            System.out.println("Invalid role. Use 'admin' or 'standard'");
+            return;
+        }
+
+        securityManager.createUser(username, password, role);
+    }
+
+    private void listUsers() {
+        securityManager.displayUsers();
+    }
+
+    private void help() {
+        System.out.println("Available Commands:");
+        System.out.println("  Basic: cd, pwd, ls, cat, echo, clear, mkdir, rmdir, rm, touch");
+        System.out.println("  Process: jobs, fg, bg, kill, run");
+        System.out.println("  Scheduling: scheduler, setalgorithm, setquantum, metrics");
+        System.out.println("  Memory: memory, setpaging");
+        System.out.println("  Synchronization: sync, semaphore, mutex, philosophers, producerconsumer");
+        System.out.println("  Security: whoami, logout, chmod, lsattr, adduser, users");
+        System.out.println("  Piping: Use | to pipe commands, < for input, > for output redirection");
+        System.out.println("  Examples:");
+        System.out.println("    ls | grep txt");
+        System.out.println("    cat file.txt | sort > sorted.txt");
+        System.out.println("    ls > output.txt");
     }
 
     private ProcessJob runExternalCommand(String command, String[] args, boolean isBackground) {
@@ -1467,6 +2008,6 @@ public class AdvancedShell3 {
     }
 
     public static void main(String[] args) {
-        new AdvancedShell3().start();
+        new AdvancedShell4().start();
     }
 }

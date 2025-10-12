@@ -187,7 +187,7 @@ public class AdvancedShell2 {
         }
     }
 
-    public AdvancedShell() {
+    public AdvancedShell2() {
         this.currentDirectory = System.getProperty("user.dir");
         this.jobs = new ConcurrentHashMap<>();
         this.nextJobId = new AtomicInteger(1);
